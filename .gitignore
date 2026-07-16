@@ -8,3 +8,5 @@ server.err.log
 !.env.example
 bin/*.exe
 *.log
+
+.vercel
