@@ -412,8 +412,9 @@ function renderPanel(project, job) {
         ${
           output
             ? `
-          <video controls src="${output.videoUrl}">
-            <track kind="subtitles" srclang="ko" label="Korean" src="${output.vttUrl}" default>
+          <video controls preload="metadata">
+            <source src="${escapeAttribute(output.videoUrl)}" type="video/mp4">
+            <track kind="subtitles" srclang="ko" label="Korean" src="${escapeAttribute(output.vttUrl)}" default>
           </video>
           <div class="meta-grid">
             <div class="meta"><span>길이</span><strong>${Math.round(output.duration)}초</strong></div>
@@ -421,9 +422,9 @@ function renderPanel(project, job) {
             <div class="meta"><span>용량</span><strong>${formatBytes(output.fileSize || 0)}</strong></div>
           </div>
           <div class="download-grid">
-            <a class="download-button" href="${output.videoUrl}" download>MP4</a>
-            <a class="download-button" href="${output.srtUrl}" download>SRT</a>
-            <a class="download-button" href="${output.projectJsonUrl}" download>JSON</a>
+            <a class="download-button" href="${escapeAttribute(output.videoUrl)}" download>MP4</a>
+            <a class="download-button" href="${escapeAttribute(output.srtUrl)}" download>SRT</a>
+            <a class="download-button" href="${escapeAttribute(output.projectJsonUrl)}" download>JSON</a>
           </div>
         `
             : ""

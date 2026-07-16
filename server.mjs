@@ -177,7 +177,7 @@ export async function handleApi(req, res, url) {
       completedProject.status = completedJob.status === "completed" ? "completed" : "failed";
       completedProject.latestJobId = job.id;
       await saveProject(completedProject);
-      sendJson(res, 200, { job: completedJob });
+      sendJson(res, 200, { job: publicJob(completedJob) });
     } else {
       startRender(project, job.id);
       sendJson(res, 202, { job });
@@ -187,13 +187,19 @@ export async function handleApi(req, res, url) {
 
   const jobMatch = pathname.match(/^\/api\/jobs\/([^/]+)$/);
   if (jobMatch && req.method === "GET") {
-    sendJson(res, 200, { job: await getJob(jobMatch[1]) });
+    sendJson(res, 200, { job: publicJob(await getJob(jobMatch[1])) });
+    return;
+  }
+
+  const jobOutputMatch = pathname.match(/^\/api\/jobs\/([^/]+)\/outputs\/([^/]+)$/);
+  if (jobOutputMatch && req.method === "GET") {
+    await serveJobOutput(req, res, jobOutputMatch[1], jobOutputMatch[2]);
     return;
   }
 
   const outputMatch = pathname.match(/^\/api\/projects\/([^/]+)\/outputs\/([^/]+)\/([^/]+)$/);
   if (outputMatch && req.method === "GET") {
-    await serveOutput(res, outputMatch[1], outputMatch[2], outputMatch[3]);
+    await serveOutput(req, res, outputMatch[1], outputMatch[2], outputMatch[3]);
     return;
   }
 
@@ -251,30 +257,174 @@ async function serveStatic(res, pathname) {
   }
 }
 
-async function serveOutput(res, projectId, jobId, kind) {
-  const map = {
-    video: ["final.mp4", "video/mp4", "inline", "final-video.mp4"],
-    srt: ["captions.srt", "text/plain; charset=utf-8", "attachment", "captions.srt"],
-    vtt: ["captions.vtt", "text/vtt; charset=utf-8", "attachment", "captions.vtt"],
-    json: ["project.json", "application/json; charset=utf-8", "attachment", "project.json"]
-  };
-  const target = map[kind];
+const outputTargets = {
+  video: {
+    fileName: "final.mp4",
+    type: "video/mp4",
+    disposition: "inline",
+    downloadName: "final-video.mp4",
+    urlKey: "videoUrl"
+  },
+  srt: {
+    fileName: "captions.srt",
+    type: "text/plain; charset=utf-8",
+    disposition: "attachment",
+    downloadName: "captions.srt",
+    urlKey: "srtUrl"
+  },
+  vtt: {
+    fileName: "captions.vtt",
+    type: "text/vtt; charset=utf-8",
+    disposition: "attachment",
+    downloadName: "captions.vtt",
+    urlKey: "vttUrl"
+  },
+  json: {
+    fileName: "project.json",
+    type: "application/json; charset=utf-8",
+    disposition: "attachment",
+    downloadName: "project.json",
+    urlKey: "projectJsonUrl"
+  }
+};
+
+async function serveJobOutput(req, res, jobId, kind) {
+  const job = await getJob(jobId);
+  const target = outputTargets[kind];
   if (!target) {
     sendJson(res, 404, { error: "Unsupported output type." });
     return;
   }
-  const [fileName, type, disposition, downloadName] = target;
+
+  const inlineSource = inlineOutputSource(job, kind);
+  if (inlineSource) {
+    const parsed = parseDataUrl(inlineSource);
+    if (!parsed) {
+      sendJson(res, 500, { error: "Stored output is not a valid data URL." });
+      return;
+    }
+    serveBuffer(req, res, parsed.buffer, parsed.type || target.type, target.disposition, target.downloadName);
+    return;
+  }
+
+  if (job.projectId) {
+    await serveOutput(req, res, job.projectId, jobId, kind);
+    return;
+  }
+
+  sendJson(res, 404, { error: "Output file not found." });
+}
+
+async function serveOutput(req, res, projectId, jobId, kind) {
+  const target = outputTargets[kind];
+  if (!target) {
+    sendJson(res, 404, { error: "Unsupported output type." });
+    return;
+  }
+
   try {
-    const body = await fs.readFile(path.join(outputRoot(projectId, jobId), fileName));
-    res.writeHead(200, {
-      "Content-Type": type,
-      "Content-Disposition": `${disposition}; filename="${downloadName}"`,
-      "Cache-Control": "no-store"
-    });
-    res.end(body);
+    const body = await fs.readFile(path.join(outputRoot(projectId, jobId), target.fileName));
+    serveBuffer(req, res, body, target.type, target.disposition, target.downloadName);
   } catch {
     sendJson(res, 404, { error: "Output file not found." });
   }
+}
+
+function inlineOutputSource(job, kind) {
+  const target = outputTargets[kind];
+  const output = job?.output || {};
+  const inlineFile = output.inlineFiles?.[kind];
+  if (isDataUrl(inlineFile)) return inlineFile;
+  const legacyUrl = output[target.urlKey];
+  return isDataUrl(legacyUrl) ? legacyUrl : "";
+}
+
+function publicJob(job) {
+  const copy = JSON.parse(JSON.stringify(job || {}));
+  if (!copy.output) return copy;
+
+  delete copy.output.inlineFiles;
+  for (const [kind, target] of Object.entries(outputTargets)) {
+    const hasInlineOutput = Boolean(job.output?.inlineFiles?.[kind]) || isDataUrl(job.output?.[target.urlKey]);
+    if (hasInlineOutput) {
+      copy.output[target.urlKey] = `/api/jobs/${copy.id}/outputs/${kind}`;
+    }
+  }
+  return copy;
+}
+
+function serveBuffer(req, res, buffer, type, disposition, downloadName) {
+  const range = parseRangeHeader(req.headers.range, buffer.byteLength);
+  const baseHeaders = {
+    "Accept-Ranges": "bytes",
+    "Content-Type": type,
+    "Content-Disposition": `${disposition}; filename="${downloadName}"`,
+    "Cache-Control": "no-store",
+    "X-Content-Type-Options": "nosniff"
+  };
+
+  if (range === "invalid") {
+    res.writeHead(416, {
+      ...baseHeaders,
+      "Content-Range": `bytes */${buffer.byteLength}`
+    });
+    res.end();
+    return;
+  }
+
+  if (range) {
+    const chunk = buffer.subarray(range.start, range.end + 1);
+    res.writeHead(206, {
+      ...baseHeaders,
+      "Content-Length": chunk.byteLength,
+      "Content-Range": `bytes ${range.start}-${range.end}/${buffer.byteLength}`
+    });
+    res.end(chunk);
+    return;
+  }
+
+  res.writeHead(200, {
+    ...baseHeaders,
+    "Content-Length": buffer.byteLength
+  });
+  res.end(buffer);
+}
+
+export function parseRangeHeader(header, size) {
+  if (!header) return null;
+  const match = String(header).match(/^bytes=(\d*)-(\d*)$/);
+  if (!match || size < 1) return "invalid";
+
+  let start;
+  let end;
+  if (match[1] === "") {
+    const suffixLength = Number(match[2]);
+    if (!Number.isFinite(suffixLength) || suffixLength <= 0) return "invalid";
+    start = Math.max(size - suffixLength, 0);
+    end = size - 1;
+  } else {
+    start = Number(match[1]);
+    end = match[2] === "" ? size - 1 : Number(match[2]);
+  }
+
+  if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end < start || start >= size) {
+    return "invalid";
+  }
+
+  return { start, end: Math.min(end, size - 1) };
+}
+
+export function parseDataUrl(value) {
+  const match = String(value || "").match(/^data:([^,]*?)(;base64)?,([\s\S]*)$/);
+  if (!match) return null;
+  const type = match[1] || "application/octet-stream";
+  const body = match[3] || "";
+  const buffer = match[2] ? Buffer.from(body, "base64") : Buffer.from(decodeURIComponent(body), "utf8");
+  return { type, buffer };
+}
+
+function isDataUrl(value) {
+  return typeof value === "string" && value.startsWith("data:");
 }
 
 async function readFormData(req) {
