@@ -1,0 +1,10 @@
+node_modules
+.vercel
+data
+server.out.log
+server.err.log
+.env
+.env.*
+!.env.example
+bin/*.exe
+*.log

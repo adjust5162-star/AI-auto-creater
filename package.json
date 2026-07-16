@@ -1,0 +1,14 @@
+{
+  "name": "video-automation-app",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node server.mjs",
+    "start": "node server.mjs",
+    "test": "node --test tests/*.test.mjs"
+  },
+  "dependencies": {
+    "@ffmpeg-installer/ffmpeg": "1.1.0"
+  }
+}
