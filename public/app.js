@@ -31,7 +31,7 @@ await refreshProjects();
 async function refreshProjects(selectId) {
   const response = await fetch("/api/projects", { cache: "no-store" });
   const data = await response.json();
-  state.projects = data.projects || [];
+  state.projects = (data.projects || []).map(normalizeProjectForUi);
   state.selectedProject =
     state.projects.find((project) => project.id === selectId) ||
     state.projects.find((project) => project.id === state.selectedProject?.id) ||
@@ -155,6 +155,35 @@ function renderProjectList() {
       startPolling();
     });
   });
+}
+
+function normalizeProjectForUi(project) {
+  const title = recoverProjectTitle(project);
+  return title === project.title ? project : { ...project, title };
+}
+
+function recoverProjectTitle(project) {
+  const title = String(project?.title || "").trim();
+  if (title && !hasBrokenText(title)) return title;
+
+  const scenes = Array.isArray(project?.scenes) ? [...project.scenes].sort((a, b) => a.index - b.index) : [];
+  const headline = stripBrokenText(scenes[0]?.headline || "").replace(/^핵심:\s*/, "");
+  if (headline) return headline;
+
+  const cleanedTitle = stripBrokenText(title);
+  return cleanedTitle || "제목 없는 프로젝트";
+}
+
+function hasBrokenText(value) {
+  return /\?{2,}|\uFFFD/.test(String(value || ""));
+}
+
+function stripBrokenText(value) {
+  return String(value || "")
+    .replace(/\s*\?{2,}\s*/g, " ")
+    .replace(/\uFFFD/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function renderStudio() {
