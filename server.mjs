@@ -18,6 +18,7 @@ import {
   outputRoot,
   saveJob,
   saveProject,
+  saveBufferedAsset,
   saveUploadedAsset
 } from "./lib/storage.mjs";
 
@@ -57,31 +58,42 @@ export async function handleApi(req, res, url) {
   }
 
   if (req.method === "POST" && pathname === "/api/projects") {
-    const formData = await readFormData(req);
+    const isJson = String(req.headers["content-type"] || "").includes("application/json");
+    const requestData = isJson ? await readJson(req) : await readFormData(req);
     const input = validateProjectInput({
-      title: formData.get("title"),
-      contentType: formData.get("contentType"),
-      aspectRatio: formData.get("aspectRatio"),
-      targetDuration: formData.get("targetDuration"),
-      sourceText: formData.get("sourceText"),
-      sourceUrl: formData.get("sourceUrl"),
-      voice: formData.get("voice") || "clear-ko",
-      subtitlePreset: formData.get("subtitlePreset") || "bold-bottom",
-      backgroundMusic: formData.get("backgroundMusic") || "none",
-      brandColor: formData.get("brandColor") || "#146ef5"
+      title: getRequestValue(requestData, "title"),
+      contentType: getRequestValue(requestData, "contentType"),
+      aspectRatio: getRequestValue(requestData, "aspectRatio"),
+      targetDuration: getRequestValue(requestData, "targetDuration"),
+      sourceText: getRequestValue(requestData, "sourceText"),
+      sourceUrl: getRequestValue(requestData, "sourceUrl"),
+      voice: getRequestValue(requestData, "voice") || "clear-ko",
+      subtitlePreset: getRequestValue(requestData, "subtitlePreset") || "bold-bottom",
+      backgroundMusic: getRequestValue(requestData, "backgroundMusic") || "none",
+      brandColor: getRequestValue(requestData, "brandColor") || "#146ef5"
     });
 
     const projectId = newId("proj");
     await ensureProjectFolders(projectId);
     const assets = [];
-    for (const key of ["image", "audio", "asset"]) {
-      for (const value of formData.getAll(key)) {
-        if (isFileLike(value) && value.size > 0) {
-          if (value.size > 80 * 1024 * 1024) {
-            sendJson(res, 413, { error: "Uploaded files must be smaller than 80 MB." });
-            return;
+    if (isJson) {
+      for (const value of normalizeJsonAssets(requestData.assets)) {
+        if (value.buffer.byteLength > 80 * 1024 * 1024) {
+          sendJson(res, 413, { error: "Uploaded files must be smaller than 80 MB." });
+          return;
+        }
+        assets.push(await saveBufferedAsset(projectId, value));
+      }
+    } else {
+      for (const key of ["image", "audio", "asset"]) {
+        for (const value of requestData.getAll(key)) {
+          if (isFileLike(value) && value.size > 0) {
+            if (value.size > 80 * 1024 * 1024) {
+              sendJson(res, 413, { error: "Uploaded files must be smaller than 80 MB." });
+              return;
+            }
+            assets.push(await saveUploadedAsset(projectId, value));
           }
-          assets.push(await saveUploadedAsset(projectId, value));
         }
       }
     }
@@ -316,6 +328,27 @@ function clamp(value, min, max) {
 
 function isFileLike(value) {
   return value && typeof value === "object" && typeof value.arrayBuffer === "function" && "size" in value;
+}
+
+function getRequestValue(source, key) {
+  if (typeof source?.get === "function") return source.get(key);
+  return source?.[key];
+}
+
+function normalizeJsonAssets(assets) {
+  if (!Array.isArray(assets)) return [];
+  return assets
+    .map((asset) => {
+      const data = String(asset?.data || "");
+      const base64 = data.includes(",") ? data.split(",").pop() : data;
+      if (!base64) return null;
+      return {
+        name: clean(asset.name || "asset.bin", 160),
+        type: clean(asset.type || "application/octet-stream", 120),
+        buffer: Buffer.from(base64, "base64")
+      };
+    })
+    .filter(Boolean);
 }
 
 function sendJson(res, status, payload) {

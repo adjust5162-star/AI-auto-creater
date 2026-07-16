@@ -51,9 +51,11 @@ async function createProject(event) {
   button.disabled = true;
   button.textContent = "생성 중";
   try {
+    const payload = await formToJson(form);
     const response = await fetch("/api/projects", {
       method: "POST",
-      body: new FormData(form)
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
     });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "프로젝트 생성에 실패했습니다.");
@@ -68,6 +70,46 @@ async function createProject(event) {
     button.disabled = false;
     button.textContent = "생성";
   }
+}
+
+async function formToJson(form) {
+  const data = new FormData(form);
+  const assets = [];
+  for (const key of ["image", "audio"]) {
+    const file = data.get(key);
+    if (file instanceof File && file.size > 0) {
+      assets.push(await fileToJson(file));
+    }
+  }
+
+  return {
+    title: data.get("title"),
+    contentType: data.get("contentType"),
+    aspectRatio: data.get("aspectRatio"),
+    targetDuration: data.get("targetDuration"),
+    sourceText: data.get("sourceText"),
+    sourceUrl: data.get("sourceUrl"),
+    voice: data.get("voice"),
+    subtitlePreset: data.get("subtitlePreset"),
+    backgroundMusic: data.get("backgroundMusic") || "none",
+    brandColor: data.get("brandColor"),
+    assets
+  };
+}
+
+function fileToJson(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      resolve({
+        name: file.name,
+        type: file.type,
+        data: reader.result
+      });
+    };
+    reader.onerror = () => reject(reader.error || new Error("Unable to read file."));
+    reader.readAsDataURL(file);
+  });
 }
 
 function renderMetrics() {
