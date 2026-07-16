@@ -4,7 +4,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { generateStoryboard, regenerateScene, retimeScenes } from "./lib/storyboard.mjs";
+import { generateStoryboard, getOpenRouterApiKey, regenerateScene, retimeScenes } from "./lib/storyboard.mjs";
 import { renderProject } from "./lib/renderer.mjs";
 import {
   createJob,
@@ -153,7 +153,7 @@ export async function handleApi(req, res, url) {
     const body = await readJson(req);
     const scene = await regenerateScene(project, String(body.sceneId || ""));
     project.scenes = retimeScenes(project.scenes.map((item) => (item.id === scene.id ? scene : item)));
-    project.aiProvider = process.env.OPENROUTER_API_KEY ? "openrouter" : "local";
+    project.aiProvider = getOpenRouterApiKey() ? "openrouter" : "local";
     await saveProject(project);
     sendJson(res, 200, { project, scene });
     return;
@@ -390,7 +390,7 @@ function loadEnv() {
         const match = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/);
         if (!match) continue;
         const [, key, rawValue] = match;
-        if (!process.env[key]) process.env[key] = rawValue.replace(/^["']|["']$/g, "");
+        if (!process.env[key]) process.env[key] = rawValue.replace(/^\uFEFF/, "").replace(/^["']|["']$/g, "").trim();
       }
     } catch {
       continue;
