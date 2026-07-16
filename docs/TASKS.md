@@ -20,6 +20,9 @@
 - API smoke: created project `proj_830af0547b274427` and completed render job `job_06f5329beb844434`.
 - Browser smoke: loaded `http://127.0.0.1:3210`, verified title and project form.
 - Vercel API entrypoint imports successfully.
+- GitHub pushed to `adjust5162-star/AI-auto-creater`.
+- Vercel production deployed to `https://ai-auto-creater.vercel.app`.
+- Vercel production render smoke returned completed inline MP4 output.
 
 ## Next
 

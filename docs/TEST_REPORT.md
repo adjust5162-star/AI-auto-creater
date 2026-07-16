@@ -7,6 +7,9 @@
 - Output artifacts verified through job metadata: MP4, SRT, VTT, and project JSON URLs.
 - Browser smoke: in-app browser loaded the app and confirmed title/form/studio shell.
 - Vercel import smoke: `/api/index.mjs` imports and exposes a function handler.
+- Vercel production page: `https://ai-auto-creater.vercel.app/` returns 200 and includes the app title.
+- Vercel production API: `GET /api/projects` returns 200.
+- Vercel production render smoke: project `proj_402a395d1d704803` rendered job successfully, returned inline MP4 data URL, output size 55,724 bytes.
 
 ## Known Environment Note
 
