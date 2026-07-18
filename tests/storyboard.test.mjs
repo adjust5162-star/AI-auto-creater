@@ -11,7 +11,7 @@ test("generates local storyboard without OpenRouter", async () => {
     aspectRatio: "vertical",
     targetDuration: 45,
     sourceText:
-      "생성형 AI는 영상 제작을 빠르게 바꾸고 있습니다. 시스템은 원문을 분석하고 장면을 나눕니다. 이후 자막과 영상을 만들어 결과물을 제공합니다.",
+      "생성형 AI는 영상 제작 과정을 빠르게 바꾸고 있습니다. 시스템은 원문을 분석하고 장면을 나눕니다. 이후 자막과 영상을 만들어 결과물을 제공합니다.",
     sourceUrl: "",
     voice: "clear-ko",
     subtitlePreset: "bold-bottom",
@@ -51,13 +51,14 @@ test("strips invisible characters from OpenRouter API key", () => {
 test("does not preserve broken placeholders in local storyboard", async () => {
   const oldKey = process.env.OPENROUTER_API_KEY;
   delete process.env.OPENROUTER_API_KEY;
+  const brokenText = `OpenRouter API ${"?".repeat(2)} ${"?".repeat(5)} ${"?".repeat(6)}. ${"?".repeat(2)} ${"?".repeat(4)}`;
 
   const result = await generateStoryboard({
     title: "OpenRouter API",
     contentType: "educational",
     aspectRatio: "landscape",
     targetDuration: 15,
-    sourceText: "OpenRouter API ?? ????? ??????. ?? ????",
+    sourceText: brokenText,
     sourceUrl: "",
     voice: "clear-ko",
     subtitlePreset: "bold-bottom",

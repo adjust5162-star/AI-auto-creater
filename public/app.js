@@ -5,13 +5,13 @@ const state = {
   pollTimer: null
 };
 
-const labels = {
+const contentLabels = {
   educational: "교육",
   news: "뉴스 요약",
   product: "제품 소개",
   healthcare: "헬스케어",
-  shorts: "숏폼",
-  slideshow: "슬라이드쇼"
+  shorts: "쇼츠",
+  slideshow: "슬라이드"
 };
 
 const statusLabels = {
@@ -20,8 +20,15 @@ const statusLabels = {
   completed: "완료",
   failed: "실패",
   queued: "대기",
-  running: "진행"
+  running: "진행 중"
 };
+
+const providerLabels = {
+  openrouter: "OpenRouter",
+  local: "로컬"
+};
+
+const defaultSceneNarration = "원본 문장이 깨져 새 문장 생성이 필요합니다.";
 
 document.querySelector("#project-form").addEventListener("submit", createProject);
 document.querySelector("#refresh-projects").addEventListener("click", () => refreshProjects(state.selectedProject?.id));
@@ -29,18 +36,22 @@ document.querySelector("#refresh-projects").addEventListener("click", () => refr
 await refreshProjects();
 
 async function refreshProjects(selectId) {
-  const response = await fetch("/api/projects", { cache: "no-store" });
-  const data = await response.json();
-  state.projects = (data.projects || []).map(normalizeProjectForUi);
-  state.selectedProject =
-    state.projects.find((project) => project.id === selectId) ||
-    state.projects.find((project) => project.id === state.selectedProject?.id) ||
-    state.projects[0] ||
-    null;
-  renderMetrics();
-  renderProjectList();
-  renderStudio();
-  startPolling();
+  try {
+    const response = await fetch("/api/projects", { cache: "no-store" });
+    const data = await response.json();
+    state.projects = (data.projects || []).map(normalizeProjectForUi);
+    state.selectedProject =
+      state.projects.find((project) => project.id === selectId) ||
+      state.projects.find((project) => project.id === state.selectedProject?.id) ||
+      state.projects[0] ||
+      null;
+    renderMetrics();
+    renderProjectList();
+    renderStudio();
+    startPolling();
+  } catch (error) {
+    showMessage(error.message || "작업 목록을 불러오지 못했습니다.", "error");
+  }
 }
 
 async function createProject(event) {
@@ -49,7 +60,7 @@ async function createProject(event) {
   const form = event.currentTarget;
   const button = form.querySelector("button[type='submit']");
   button.disabled = true;
-  button.textContent = "생성 중";
+  button.textContent = "제작 중";
   try {
     const payload = await formToJson(form);
     const response = await fetch("/api/projects", {
@@ -58,21 +69,21 @@ async function createProject(event) {
       body: JSON.stringify(payload)
     });
     const data = await response.json();
-    if (!response.ok) throw new Error(data.error || "프로젝트 생성에 실패했습니다.");
+    if (!response.ok) throw new Error(data.error || "작업을 만들지 못했습니다.");
     form.reset();
     form.targetDuration.value = "45";
-    form.brandColor.value = "#146ef5";
+    form.brandColor.value = "#216ce7";
     await refreshProjects(data.project.id);
     if (payload.autoRender) {
       await startProjectRender(data.project.id);
     } else {
-      showMessage("프로젝트를 만들었습니다.", "success");
+      showMessage("새 작업을 만들었습니다.", "success");
     }
   } catch (error) {
-    showMessage(error.message || "프로젝트 생성에 실패했습니다.", "error");
+    showMessage(error.message || "작업을 만들지 못했습니다.", "error");
   } finally {
     button.disabled = false;
-    button.textContent = "생성";
+    button.textContent = "영상 만들기";
   }
 }
 
@@ -112,7 +123,7 @@ function fileToJson(file) {
         data: reader.result
       });
     };
-    reader.onerror = () => reject(reader.error || new Error("Unable to read file."));
+    reader.onerror = () => reject(reader.error || new Error("파일을 읽지 못했습니다."));
     reader.readAsDataURL(file);
   });
 }
@@ -120,7 +131,7 @@ function fileToJson(file) {
 function renderMetrics() {
   const metrics = [
     ["전체", state.projects.length],
-    ["렌더링", state.projects.filter((project) => project.status === "rendering").length],
+    ["진행", state.projects.filter((project) => project.status === "rendering").length],
     ["완료", state.projects.filter((project) => project.status === "completed").length],
     ["실패", state.projects.filter((project) => project.status === "failed").length]
   ];
@@ -132,7 +143,7 @@ function renderMetrics() {
 function renderProjectList() {
   const container = document.querySelector("#project-list");
   if (!state.projects.length) {
-    container.innerHTML = `<p class="muted">아직 프로젝트가 없습니다.</p>`;
+    container.innerHTML = `<div class="empty-list">아직 작업이 없습니다.</div>`;
     return;
   }
   container.innerHTML = state.projects
@@ -142,7 +153,7 @@ function renderProjectList() {
           <div class="item-top">
             <div>
               <div class="project-title">${escapeHtml(project.title)}</div>
-              <div class="project-subtitle">${labels[project.contentType]} · ${project.aspectRatio === "vertical" ? "9:16" : "16:9"}</div>
+              <div class="project-subtitle">${formatProjectMeta(project)}</div>
             </div>
             ${statusPill(project.status)}
           </div>
@@ -163,39 +174,61 @@ function renderProjectList() {
 }
 
 function normalizeProjectForUi(project) {
-  const title = recoverProjectTitle(project);
-  return title === project.title ? project : { ...project, title };
+  const assets = Array.isArray(project?.assets) ? project.assets : [];
+  const scenes = Array.isArray(project?.scenes)
+    ? [...project.scenes].sort((a, b) => a.index - b.index).map(sanitizeSceneForUi)
+    : [];
+  const title = recoverProjectTitle({ ...project, scenes });
+  return { ...project, title, assets, scenes };
+}
+
+function sanitizeSceneForUi(scene, fallbackIndex) {
+  const index = Number(scene.index || fallbackIndex + 1);
+  const headline = cleanBrokenDisplay(scene.headline);
+  const narration = cleanBrokenDisplay(scene.narration);
+  const highlightedWords = Array.isArray(scene.highlightedWords)
+    ? scene.highlightedWords.map(cleanBrokenDisplay).filter(Boolean)
+    : [];
+  return {
+    ...scene,
+    index,
+    headline: headline || `장면 ${index}`,
+    narration: narration || defaultSceneNarration,
+    highlightedWords
+  };
 }
 
 function recoverProjectTitle(project) {
-  const title = String(project?.title || "").trim();
-  if (title && !hasBrokenText(title)) return title;
+  const title = cleanBrokenDisplay(project?.title);
+  if (title) return title;
 
   const scenes = Array.isArray(project?.scenes) ? [...project.scenes].sort((a, b) => a.index - b.index) : [];
-  const headline = stripBrokenText(scenes[0]?.headline || "").replace(/^핵심:\s*/, "");
+  const headline = cleanBrokenDisplay(scenes[0]?.headline || "").replace(/^핵심:\s*/, "");
   if (headline) return headline;
 
-  const cleanedTitle = stripBrokenText(title);
-  return cleanedTitle || "제목 없는 프로젝트";
+  return "제목 없는 작업";
+}
+
+function cleanBrokenDisplay(value) {
+  const text = String(value || "")
+    .replace(/[\uFEFF\u200B-\u200D\u2060]/g, "")
+    .replace(/\uFFFD/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) return "";
+  if (!hasBrokenText(text)) return text;
+  return (text.match(/[A-Za-z0-9][A-Za-z0-9 .:/+#_-]*/g) || []).join(" ").replace(/\s+/g, " ").trim();
 }
 
 function hasBrokenText(value) {
   return /\?{2,}|\uFFFD/.test(String(value || ""));
 }
 
-function stripBrokenText(value) {
-  return String(value || "")
-    .replace(/\s*\?{2,}\s*/g, " ")
-    .replace(/\uFFFD/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
 function renderStudio() {
   const root = document.querySelector("#studio");
   const project = state.selectedProject;
   if (!project) {
-    root.innerHTML = `<div class="empty-state"><div><div class="empty-icon">▶</div><h2>프로젝트를 선택하세요</h2></div></div>`;
+    root.innerHTML = `<div class="empty-state"><div><div class="empty-icon">AI</div><h2>새 작업을 시작하세요</h2></div></div>`;
     return;
   }
 
@@ -203,32 +236,32 @@ function renderStudio() {
   const totalDuration = scenes.reduce((sum, scene) => sum + Number(scene.duration || 0), 0);
   root.innerHTML = `
     <div class="workspace-head">
-      <div>
-        <div class="button-row">
+      <div class="workspace-title-block">
+        <div class="button-row status-row">
           ${statusPill(project.status)}
-          <span class="status draft">${project.aiProvider === "openrouter" ? "OpenRouter" : "Local"}</span>
+          <span class="status provider-pill">${providerLabels[project.aiProvider] || "로컬"}</span>
           <span class="status draft">${project.aspectRatio === "vertical" ? "1080x1920" : "1920x1080"}</span>
         </div>
-        <input class="project-name-input" id="project-title" value="${escapeAttribute(project.title)}" aria-label="프로젝트 제목" />
-        <p class="muted">${scenes.length}개 씬 · ${Math.round(totalDuration)}초 · ${labels[project.contentType]}</p>
-        ${project.aiWarning ? `<p class="warning">${escapeHtml(project.aiWarning)}</p>` : ""}
+        <input class="project-name-input" id="project-title" value="${escapeAttribute(project.title)}" aria-label="작업 제목" />
+        <p class="muted">${scenes.length}개 장면 / ${Math.round(totalDuration)}초 / ${contentLabels[project.contentType] || "교육"}</p>
+        ${project.aiWarning ? `<p class="warning">${escapeHtml(formatWarning(project.aiWarning))}</p>` : ""}
       </div>
-      <div class="button-row">
+      <div class="button-row action-row">
         <button class="secondary-button" id="save-project" type="button">저장</button>
-        <button class="dark-button" id="render-project" type="button" ${isActiveJob() ? "disabled" : ""}>렌더</button>
+        <button class="dark-button" id="render-project" type="button" ${isActiveJob() ? "disabled" : ""}>렌더링</button>
       </div>
     </div>
     <div class="studio-grid">
-      <div>
-        <div class="section-title"><span class="icon-square">S</span><h2>씬 편집</h2></div>
+      <section class="editor-zone">
+        <div class="section-title"><span class="icon-square">S</span><h2>장면 편집</h2></div>
         <div class="scene-list">
           ${scenes.map((scene, index) => sceneEditor(project, scene, index, scenes.length)).join("")}
         </div>
-      </div>
-      <div class="side-stack">
+      </section>
+      <aside class="side-stack">
         ${renderPanel(project, state.selectedJob)}
         ${assetsPanel(project)}
-      </div>
+      </aside>
     </div>
   `;
 
@@ -245,14 +278,14 @@ function sceneEditor(project, scene, index, total) {
   return `
     <article class="scene-card" data-scene-id="${scene.id}">
       <div class="scene-head">
-        <div class="button-row">
+        <div class="button-row scene-title-row">
           <span class="scene-number">${scene.index}</span>
-          <input class="scene-title-input" data-field="headline" value="${escapeAttribute(scene.headline)}" aria-label="씬 ${scene.index} 헤드라인" />
+          <input class="scene-title-input" data-field="headline" value="${escapeAttribute(scene.headline)}" aria-label="장면 ${scene.index} 제목" />
         </div>
-        <div class="button-row">
-          <button class="icon-button" data-action="up" type="button" title="위로" ${index === 0 ? "disabled" : ""}>↑</button>
-          <button class="icon-button" data-action="down" type="button" title="아래로" ${index === total - 1 ? "disabled" : ""}>↓</button>
-          <button class="secondary-button" data-action="regenerate" type="button">재생성</button>
+        <div class="button-row scene-actions">
+          <button class="icon-button" data-action="up" type="button" title="위로" aria-label="위로" ${index === 0 ? "disabled" : ""}>↑</button>
+          <button class="icon-button" data-action="down" type="button" title="아래로" aria-label="아래로" ${index === total - 1 ? "disabled" : ""}>↓</button>
+          <button class="secondary-button slim-button" data-action="regenerate" type="button">재생성</button>
         </div>
       </div>
       <label>
@@ -271,7 +304,7 @@ function sceneEditor(project, scene, index, total) {
             ${visualAssets
               .map(
                 (asset) =>
-                  `<option value="${asset.id}" ${scene.assetId === asset.id ? "selected" : ""}>${escapeHtml(asset.originalName)} · ${assetKindLabel(asset.kind)}</option>`
+                  `<option value="${asset.id}" ${scene.assetId === asset.id ? "selected" : ""}>${escapeHtml(asset.originalName)} / ${assetKindLabel(asset.kind)}</option>`
               )
               .join("")}
           </select>
@@ -279,17 +312,17 @@ function sceneEditor(project, scene, index, total) {
         <label>
           전환
           <select data-field="transition">
-            <option value="cut" ${scene.transition === "cut" ? "selected" : ""}>Cut</option>
-            <option value="fade" ${scene.transition === "fade" ? "selected" : ""}>Fade</option>
+            <option value="cut" ${scene.transition === "cut" ? "selected" : ""}>컷</option>
+            <option value="fade" ${scene.transition === "fade" ? "selected" : ""}>페이드</option>
           </select>
         </label>
         <label>
           카메라
           <select data-field="cameraMovement">
-            <option value="none" ${scene.cameraMovement === "none" ? "selected" : ""}>None</option>
-            <option value="slow-zoom" ${scene.cameraMovement === "slow-zoom" ? "selected" : ""}>Slow Zoom</option>
-            <option value="pan-left" ${scene.cameraMovement === "pan-left" ? "selected" : ""}>Pan Left</option>
-            <option value="pan-right" ${scene.cameraMovement === "pan-right" ? "selected" : ""}>Pan Right</option>
+            <option value="none" ${scene.cameraMovement === "none" ? "selected" : ""}>고정</option>
+            <option value="slow-zoom" ${scene.cameraMovement === "slow-zoom" ? "selected" : ""}>느린 확대</option>
+            <option value="pan-left" ${scene.cameraMovement === "pan-left" ? "selected" : ""}>왼쪽 이동</option>
+            <option value="pan-right" ${scene.cameraMovement === "pan-right" ? "selected" : ""}>오른쪽 이동</option>
           </select>
         </label>
       </div>
@@ -324,26 +357,31 @@ async function saveSelectedProject() {
   const project = state.selectedProject;
   if (!project) return null;
   clearMessage();
-  project.scenes = retimeLocal(project.scenes);
-  const response = await fetch(`/api/projects/${project.id}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      title: project.title,
-      targetDuration: project.targetDuration,
-      brandColor: project.brandColor,
-      scenes: project.scenes
-    })
-  });
-  const data = await response.json();
-  if (!response.ok) {
-    showMessage(data.error || "저장에 실패했습니다.", "error");
+  try {
+    project.scenes = retimeLocal(project.scenes);
+    const response = await fetch(`/api/projects/${project.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title: project.title,
+        targetDuration: project.targetDuration,
+        brandColor: project.brandColor,
+        scenes: project.scenes
+      })
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      showMessage(data.error || "저장하지 못했습니다.", "error");
+      return null;
+    }
+    state.selectedProject = normalizeProjectForUi(data.project);
+    showMessage("저장했습니다.", "success");
+    await refreshProjects(data.project.id);
+    return state.selectedProject;
+  } catch (error) {
+    showMessage(error.message || "저장하지 못했습니다.", "error");
     return null;
   }
-  state.selectedProject = data.project;
-  showMessage("저장했습니다.", "success");
-  await refreshProjects(data.project.id);
-  return data.project;
 }
 
 async function renderSelectedProject() {
@@ -353,37 +391,49 @@ async function renderSelectedProject() {
 }
 
 async function startProjectRender(projectId, savedProject = state.selectedProject) {
-  const response = await fetch(`/api/projects/${projectId}/render`, { method: "POST" });
-  const data = await response.json();
-  if (!response.ok) {
-    showMessage(data.error || "렌더링을 시작하지 못했습니다.", "error");
-    return;
+  try {
+    const response = await fetch(`/api/projects/${projectId}/render`, { method: "POST" });
+    const data = await response.json();
+    if (!response.ok) {
+      showMessage(data.error || "렌더링을 시작하지 못했습니다.", "error");
+      return;
+    }
+    state.selectedJob = data.job;
+    const completed = data.job.status === "completed";
+    state.selectedProject = normalizeProjectForUi({
+      ...savedProject,
+      status: completed ? "completed" : "rendering",
+      latestJobId: data.job.id
+    });
+    showMessage(completed ? "완성된 영상을 만들었습니다." : "렌더링을 시작했습니다.", "success");
+    renderStudio();
+    startPolling();
+    if (completed) await refreshProjects(projectId);
+  } catch (error) {
+    showMessage(error.message || "렌더링을 시작하지 못했습니다.", "error");
   }
-  state.selectedJob = data.job;
-  const completed = data.job.status === "completed";
-  state.selectedProject = { ...savedProject, status: completed ? "completed" : "rendering", latestJobId: data.job.id };
-  showMessage(completed ? "완성 영상을 만들었습니다." : "렌더링을 시작했습니다.", "success");
-  renderStudio();
-  startPolling();
-  if (completed) await refreshProjects(projectId);
 }
 
 async function regenerateSelectedScene(sceneId) {
   const project = await saveSelectedProject();
   if (!project) return;
-  const response = await fetch(`/api/projects/${project.id}/regenerate-scene`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ sceneId })
-  });
-  const data = await response.json();
-  if (!response.ok) {
-    showMessage(data.error || "씬 재생성에 실패했습니다.", "error");
-    return;
+  try {
+    const response = await fetch(`/api/projects/${project.id}/regenerate-scene`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sceneId })
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      showMessage(data.error || "장면을 다시 만들지 못했습니다.", "error");
+      return;
+    }
+    state.selectedProject = normalizeProjectForUi(data.project);
+    showMessage("장면을 다시 만들었습니다.", "success");
+    await refreshProjects(data.project.id);
+  } catch (error) {
+    showMessage(error.message || "장면을 다시 만들지 못했습니다.", "error");
   }
-  state.selectedProject = data.project;
-  showMessage("씬을 다시 생성했습니다.", "success");
-  await refreshProjects(data.project.id);
 }
 
 function moveScene(sceneId, direction) {
@@ -402,33 +452,33 @@ function moveScene(sceneId, direction) {
 function renderPanel(project, job) {
   if (!job) {
     return `
-      <section class="panel">
-        <div class="section-title"><span class="icon-square">R</span><h2>렌더 상태</h2></div>
-        <p class="muted">${project.status === "draft" ? "렌더 대기 중입니다." : "렌더 기록을 불러오는 중입니다."}</p>
+      <section class="side-panel">
+        <div class="section-title"><span class="icon-square">R</span><h2>미리보기</h2></div>
+        <div class="preview-empty">${project.status === "draft" ? "렌더링 준비됨" : "렌더링 기록 확인 중"}</div>
       </section>
     `;
   }
 
   const output = job.output;
   return `
-    <section class="panel">
-      <div class="section-title"><span class="icon-square">R</span><h2>렌더 상태</h2></div>
+    <section class="side-panel">
+      <div class="section-title"><span class="icon-square">R</span><h2>미리보기</h2></div>
       <div class="render-stack">
         <div class="item-top">
           <div>
-            <strong>${escapeHtml(job.stage)}</strong>
+            <strong>${escapeHtml(formatStage(job.stage))}</strong>
             ${job.error ? `<p class="warning">${escapeHtml(job.error)}</p>` : ""}
           </div>
           ${statusPill(job.status === "completed" ? "completed" : job.status === "failed" ? "failed" : "rendering")}
         </div>
         <div class="progress-bar"><div class="progress-fill" style="width:${Math.max(0, Math.min(100, job.progress || 0))}%"></div></div>
-        ${(job.warnings || []).map((warning) => `<p class="warning">${escapeHtml(warning)}</p>`).join("")}
+        ${(job.warnings || []).map((warning) => `<p class="warning">${escapeHtml(formatWarning(warning))}</p>`).join("")}
         ${
           output
             ? `
-          <video controls preload="metadata">
+          <video controls preload="metadata" playsinline>
             <source src="${escapeAttribute(output.videoUrl)}" type="video/mp4">
-            <track kind="subtitles" srclang="ko" label="Korean" src="${escapeAttribute(output.vttUrl)}" default>
+            <track kind="subtitles" srclang="ko" label="한국어" src="${escapeAttribute(output.vttUrl)}" default>
           </video>
           <div class="meta-grid">
             <div class="meta"><span>길이</span><strong>${Math.round(output.duration)}초</strong></div>
@@ -437,7 +487,7 @@ function renderPanel(project, job) {
           </div>
           <div class="download-grid">
             <a class="download-button" href="${escapeAttribute(output.videoUrl)}" download>MP4</a>
-            <a class="download-button" href="${escapeAttribute(output.srtUrl)}" download>SRT</a>
+            <a class="download-button" href="${escapeAttribute(output.srtUrl)}" download>자막</a>
             <a class="download-button" href="${escapeAttribute(output.projectJsonUrl)}" download>JSON</a>
           </div>
         `
@@ -451,22 +501,22 @@ function renderPanel(project, job) {
 function assetsPanel(project) {
   if (!project.assets.length) {
     return `
-      <section class="panel">
-        <div class="section-title"><span class="icon-square">A</span><h2>에셋</h2></div>
-        <p class="muted">업로드된 에셋이 없습니다.</p>
+      <section class="side-panel">
+        <div class="section-title"><span class="icon-square">A</span><h2>자료</h2></div>
+        <p class="muted">추가된 자료 없음</p>
       </section>
     `;
   }
   return `
-    <section class="panel">
-      <div class="section-title"><span class="icon-square">A</span><h2>에셋</h2></div>
+    <section class="side-panel">
+      <div class="section-title"><span class="icon-square">A</span><h2>자료</h2></div>
       <div class="asset-list">
         ${project.assets
           .map(
             (asset) => `
             <div class="asset-item">
               <strong>${escapeHtml(asset.originalName)}</strong>
-              <div class="muted">${assetKindLabel(asset.kind)} · ${formatBytes(asset.size)}</div>
+              <div><span class="asset-kind">${assetKindLabel(asset.kind)} / ${formatBytes(asset.size)}</span></div>
             </div>
           `
           )
@@ -521,6 +571,33 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
+function formatProjectMeta(project) {
+  const type = contentLabels[project.contentType] || "교육";
+  const aspect = project.aspectRatio === "vertical" ? "9:16" : "16:9";
+  return `${type} / ${aspect}`;
+}
+
+function formatStage(stage) {
+  const value = String(stage || "");
+  if (/^Composing scene (\d+) of (\d+)/.test(value)) {
+    return value.replace(/^Composing scene (\d+) of (\d+)/, "장면 $1/$2 제작 중");
+  }
+  return (
+    {
+      "Preparing subtitles": "자막 준비",
+      "Joining scene clips": "영상 합치는 중",
+      "Mixing uploaded audio": "오디오 합성",
+      "Optimizing MP4 playback": "MP4 최적화",
+      Completed: "완료",
+      Failed: "실패"
+    }[value] || cleanBrokenDisplay(value) || "렌더링"
+  );
+}
+
+function formatWarning(value) {
+  return cleanBrokenDisplay(value) || "일부 내용을 처리하지 못했습니다.";
+}
+
 function formatBytes(bytes) {
   if (!bytes) return "0 KB";
   const units = ["B", "KB", "MB", "GB"];
@@ -529,12 +606,14 @@ function formatBytes(bytes) {
 }
 
 function assetKindLabel(kind) {
-  return {
-    image: "이미지",
-    video: "영상",
-    audio: "오디오",
-    document: "문서"
-  }[kind] || kind;
+  return (
+    {
+      image: "이미지",
+      video: "영상",
+      audio: "오디오",
+      document: "문서"
+    }[kind] || kind
+  );
 }
 
 function showMessage(text, type) {
