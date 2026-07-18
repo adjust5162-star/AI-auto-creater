@@ -6,6 +6,7 @@ import { Readable } from "node:stream";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { generateStoryboard, getOpenRouterApiKey, regenerateScene, retimeScenes } from "./lib/storyboard.mjs";
 import { renderProject } from "./lib/renderer.mjs";
+import { buildSourceText, importSourceUrl } from "./lib/source-inputs.mjs";
 import {
   createJob,
   ensureProjectFolders,
@@ -60,7 +61,7 @@ export async function handleApi(req, res, url) {
   if (req.method === "POST" && pathname === "/api/projects") {
     const isJson = String(req.headers["content-type"] || "").includes("application/json");
     const requestData = isJson ? await readJson(req) : await readFormData(req);
-    const input = validateProjectInput({
+    const rawInput = normalizeProjectInput({
       title: getRequestValue(requestData, "title"),
       contentType: getRequestValue(requestData, "contentType"),
       aspectRatio: getRequestValue(requestData, "aspectRatio"),
@@ -75,35 +76,27 @@ export async function handleApi(req, res, url) {
 
     const projectId = newId("proj");
     await ensureProjectFolders(projectId);
-    const assets = [];
-    if (isJson) {
-      for (const value of normalizeJsonAssets(requestData.assets)) {
-        if (value.buffer.byteLength > 80 * 1024 * 1024) {
-          sendJson(res, 413, { error: "Uploaded files must be smaller than 80 MB." });
-          return;
-        }
-        assets.push(await saveBufferedAsset(projectId, value));
-      }
-    } else {
-      for (const key of ["image", "audio", "asset"]) {
-        for (const value of requestData.getAll(key)) {
-          if (isFileLike(value) && value.size > 0) {
-            if (value.size > 80 * 1024 * 1024) {
-              sendJson(res, 413, { error: "Uploaded files must be smaller than 80 MB." });
-              return;
-            }
-            assets.push(await saveUploadedAsset(projectId, value));
-          }
-        }
-      }
+    let assets;
+    try {
+      assets = await collectRequestAssets(projectId, requestData, isJson);
+    } catch (error) {
+      sendJson(res, 413, { error: error instanceof Error ? error.message : "Uploaded files are too large." });
+      return;
     }
+    const remoteSource = await importSourceUrl(projectId, rawInput.sourceUrl);
+    assets.push(...remoteSource.assets);
+    const input = validateProjectInput({
+      ...rawInput,
+      sourceText: buildSourceText([rawInput.sourceText, remoteSource.text].filter(Boolean).join("\n"), rawInput.sourceUrl, assets)
+    });
 
     const generated = await generateStoryboard(input);
-    const imageAssets = assets.filter((asset) => asset.kind === "image");
+    const visualAssets = assets.filter((asset) => asset.kind === "image" || asset.kind === "video");
     const scenes = generated.scenes.map((scene, index) => ({
       ...scene,
-      assetId: imageAssets.length ? imageAssets[index % imageAssets.length].id : scene.assetId
+      assetId: visualAssets.length ? visualAssets[index % visualAssets.length].id : scene.assetId
     }));
+    const warnings = [...remoteSource.warnings, generated.aiWarning].filter(Boolean);
 
     const timestamp = nowIso();
     const project = {
@@ -112,7 +105,7 @@ export async function handleApi(req, res, url) {
       sourceUrl: input.sourceUrl || undefined,
       status: "draft",
       aiProvider: generated.aiProvider,
-      aiWarning: generated.aiWarning,
+      aiWarning: warnings.length ? warnings.join(" ") : undefined,
       assets,
       scenes,
       createdAt: timestamp,
@@ -451,8 +444,8 @@ async function readJson(req) {
   return text ? JSON.parse(text) : {};
 }
 
-function validateProjectInput(raw) {
-  const input = {
+function normalizeProjectInput(raw) {
+  return {
     title: clean(raw.title, 120),
     contentType: String(raw.contentType || "educational"),
     aspectRatio: String(raw.aspectRatio || "vertical"),
@@ -464,8 +457,14 @@ function validateProjectInput(raw) {
     backgroundMusic: clean(raw.backgroundMusic || "none", 80),
     brandColor: clean(raw.brandColor || "#146ef5", 7)
   };
+}
+
+function validateProjectInput(raw) {
+  const input = normalizeProjectInput(raw);
   if (input.title.length < 2) throw new Error("Title must be at least 2 characters.");
-  if (input.sourceText.length < 20) throw new Error("Source text must be at least 20 characters.");
+  if (input.sourceText.length < 20) {
+    throw new Error("대본, 영상 URL, 이미지 또는 영상 파일 중 하나 이상을 제공해 주세요.");
+  }
   if (!["educational", "news", "product", "healthcare", "shorts", "slideshow"].includes(input.contentType)) {
     input.contentType = "educational";
   }
@@ -490,6 +489,31 @@ function isFileLike(value) {
 function getRequestValue(source, key) {
   if (typeof source?.get === "function") return source.get(key);
   return source?.[key];
+}
+
+async function collectRequestAssets(projectId, requestData, isJson) {
+  const assets = [];
+  if (isJson) {
+    for (const value of normalizeJsonAssets(requestData.assets)) {
+      if (value.buffer.byteLength > 80 * 1024 * 1024) {
+        throw new Error("Uploaded files must be smaller than 80 MB.");
+      }
+      assets.push(await saveBufferedAsset(projectId, value));
+    }
+    return assets;
+  }
+
+  for (const key of ["image", "video", "audio", "asset"]) {
+    for (const value of requestData.getAll(key)) {
+      if (isFileLike(value) && value.size > 0) {
+        if (value.size > 80 * 1024 * 1024) {
+          throw new Error("Uploaded files must be smaller than 80 MB.");
+        }
+        assets.push(await saveUploadedAsset(projectId, value));
+      }
+    }
+  }
+  return assets;
 }
 
 function normalizeJsonAssets(assets) {

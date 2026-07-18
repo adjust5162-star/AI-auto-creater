@@ -61,18 +61,24 @@
                 </label>
               </div>
               <label>
-                원문
-                <textarea name="sourceText" rows="7" required placeholder="영상으로 만들 내용을 붙여 넣으세요."></textarea>
+                대본/스크립트
+                <textarea name="sourceText" rows="7" placeholder="영상으로 만들 대본이나 핵심 내용을 붙여 넣으세요. URL 또는 이미지/영상만 제공해도 생성할 수 있습니다."></textarea>
               </label>
               <label>
-                출처 URL
+                영상/이미지/자료 URL
                 <input name="sourceUrl" placeholder="https://..." />
               </label>
               <div class="two-col">
                 <label>
                   이미지
-                  <input name="image" type="file" accept="image/*" />
+                  <input name="image" type="file" accept="image/*" multiple />
                 </label>
+                <label>
+                  영상
+                  <input name="video" type="file" accept="video/*" multiple />
+                </label>
+              </div>
+              <div class="two-col">
                 <label>
                   오디오
                   <input name="audio" type="file" accept="audio/*" />
@@ -96,6 +102,10 @@
                   </select>
                 </label>
               </div>
+              <label class="checkbox-row">
+                <input name="autoRender" type="checkbox" checked />
+                생성 후 렌더
+              </label>
               <button class="primary-button" type="submit">생성</button>
             </form>
           </section>

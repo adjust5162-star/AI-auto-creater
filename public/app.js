@@ -62,8 +62,12 @@ async function createProject(event) {
     form.reset();
     form.targetDuration.value = "45";
     form.brandColor.value = "#146ef5";
-    showMessage("프로젝트를 만들었습니다.", "success");
     await refreshProjects(data.project.id);
+    if (payload.autoRender) {
+      await startProjectRender(data.project.id);
+    } else {
+      showMessage("프로젝트를 만들었습니다.", "success");
+    }
   } catch (error) {
     showMessage(error.message || "프로젝트 생성에 실패했습니다.", "error");
   } finally {
@@ -75,9 +79,9 @@ async function createProject(event) {
 async function formToJson(form) {
   const data = new FormData(form);
   const assets = [];
-  for (const key of ["image", "audio"]) {
-    const file = data.get(key);
-    if (file instanceof File && file.size > 0) {
+  for (const key of ["image", "video", "audio"]) {
+    for (const file of data.getAll(key)) {
+      if (!(file instanceof File) || file.size <= 0) continue;
       assets.push(await fileToJson(file));
     }
   }
@@ -93,6 +97,7 @@ async function formToJson(form) {
     subtitlePreset: data.get("subtitlePreset"),
     backgroundMusic: data.get("backgroundMusic") || "none",
     brandColor: data.get("brandColor"),
+    autoRender: data.get("autoRender") === "on",
     assets
   };
 }
@@ -236,7 +241,7 @@ function renderStudio() {
 }
 
 function sceneEditor(project, scene, index, total) {
-  const images = project.assets.filter((asset) => asset.kind === "image");
+  const visualAssets = project.assets.filter((asset) => asset.kind === "image" || asset.kind === "video");
   return `
     <article class="scene-card" data-scene-id="${scene.id}">
       <div class="scene-head">
@@ -260,11 +265,14 @@ function sceneEditor(project, scene, index, total) {
           <input data-field="duration" type="number" min="3" max="45" value="${scene.duration}" />
         </label>
         <label>
-          이미지
+          시각 자료
           <select data-field="assetId">
             <option value="">자동</option>
-            ${images
-              .map((asset) => `<option value="${asset.id}" ${scene.assetId === asset.id ? "selected" : ""}>${escapeHtml(asset.originalName)}</option>`)
+            ${visualAssets
+              .map(
+                (asset) =>
+                  `<option value="${asset.id}" ${scene.assetId === asset.id ? "selected" : ""}>${escapeHtml(asset.originalName)} · ${assetKindLabel(asset.kind)}</option>`
+              )
               .join("")}
           </select>
         </label>
@@ -341,17 +349,23 @@ async function saveSelectedProject() {
 async function renderSelectedProject() {
   const saved = await saveSelectedProject();
   if (!saved) return;
-  const response = await fetch(`/api/projects/${saved.id}/render`, { method: "POST" });
+  await startProjectRender(saved.id, saved);
+}
+
+async function startProjectRender(projectId, savedProject = state.selectedProject) {
+  const response = await fetch(`/api/projects/${projectId}/render`, { method: "POST" });
   const data = await response.json();
   if (!response.ok) {
     showMessage(data.error || "렌더링을 시작하지 못했습니다.", "error");
     return;
   }
   state.selectedJob = data.job;
-  state.selectedProject = { ...saved, status: "rendering", latestJobId: data.job.id };
-  showMessage("렌더링을 시작했습니다.", "success");
+  const completed = data.job.status === "completed";
+  state.selectedProject = { ...savedProject, status: completed ? "completed" : "rendering", latestJobId: data.job.id };
+  showMessage(completed ? "완성 영상을 만들었습니다." : "렌더링을 시작했습니다.", "success");
   renderStudio();
   startPolling();
+  if (completed) await refreshProjects(projectId);
 }
 
 async function regenerateSelectedScene(sceneId) {
@@ -452,7 +466,7 @@ function assetsPanel(project) {
             (asset) => `
             <div class="asset-item">
               <strong>${escapeHtml(asset.originalName)}</strong>
-              <div class="muted">${asset.kind} · ${formatBytes(asset.size)}</div>
+              <div class="muted">${assetKindLabel(asset.kind)} · ${formatBytes(asset.size)}</div>
             </div>
           `
           )
@@ -512,6 +526,15 @@ function formatBytes(bytes) {
   const units = ["B", "KB", "MB", "GB"];
   const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
   return `${(bytes / 1024 ** index).toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
+}
+
+function assetKindLabel(kind) {
+  return {
+    image: "이미지",
+    video: "영상",
+    audio: "오디오",
+    document: "문서"
+  }[kind] || kind;
 }
 
 function showMessage(text, type) {
