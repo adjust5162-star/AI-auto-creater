@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { generateStoryboard, retimeScenes } from "../lib/storyboard.mjs";
+import { generateStoryboard, getOpenRouterApiKey, retimeScenes } from "../lib/storyboard.mjs";
 
 test("generates local storyboard without OpenRouter", async () => {
   const oldKey = process.env.OPENROUTER_API_KEY;
@@ -36,4 +36,38 @@ test("retimes scenes continuously", () => {
   assert.equal(result[0].end, 4);
   assert.equal(result[1].start, 4);
   assert.equal(result[1].end, 9);
+});
+
+test("strips invisible characters from OpenRouter API key", () => {
+  const oldKey = process.env.OPENROUTER_API_KEY;
+  process.env.OPENROUTER_API_KEY = "\uFEFFsk-test\u200B\n";
+
+  assert.equal(getOpenRouterApiKey(), "sk-test");
+
+  if (oldKey === undefined) delete process.env.OPENROUTER_API_KEY;
+  else process.env.OPENROUTER_API_KEY = oldKey;
+});
+
+test("does not preserve broken placeholders in local storyboard", async () => {
+  const oldKey = process.env.OPENROUTER_API_KEY;
+  delete process.env.OPENROUTER_API_KEY;
+
+  const result = await generateStoryboard({
+    title: "OpenRouter API",
+    contentType: "educational",
+    aspectRatio: "landscape",
+    targetDuration: 15,
+    sourceText: "OpenRouter API ?? ????? ??????. ?? ????",
+    sourceUrl: "",
+    voice: "clear-ko",
+    subtitlePreset: "bold-bottom",
+    backgroundMusic: "none",
+    brandColor: "#146ef5"
+  });
+
+  const text = result.scenes.map((scene) => `${scene.headline} ${scene.narration}`).join(" ");
+  assert.doesNotMatch(text, /\?{2,}/);
+  assert.match(text, /OpenRouter API/);
+
+  if (oldKey) process.env.OPENROUTER_API_KEY = oldKey;
 });

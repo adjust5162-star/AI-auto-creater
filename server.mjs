@@ -133,6 +133,13 @@ export async function handleApi(req, res, url) {
     const project = await getProject(projectMatch[1]);
     const patch = await readJson(req);
     if (typeof patch.title === "string") project.title = clean(patch.title, 120);
+    if (Object.hasOwn(patch, "aiWarning")) {
+      const warning = clean(patch.aiWarning || "", 240);
+      project.aiWarning = warning || undefined;
+    }
+    if (typeof patch.aiProvider === "string" && ["openrouter", "local"].includes(patch.aiProvider)) {
+      project.aiProvider = patch.aiProvider;
+    }
     if (typeof patch.brandColor === "string" && /^#[0-9a-fA-F]{6}$/.test(patch.brandColor)) {
       project.brandColor = patch.brandColor;
     }
