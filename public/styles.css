@@ -608,11 +608,22 @@ textarea {
   transition: width 0.2s ease;
 }
 
-video {
+.preview-video {
+  display: block;
   width: 100%;
-  aspect-ratio: 16 / 9;
   border-radius: 6px;
   background: black;
+  object-fit: contain;
+}
+
+.preview-video-landscape {
+  aspect-ratio: 16 / 9;
+}
+
+.preview-video-vertical {
+  width: min(100%, 340px);
+  aspect-ratio: 9 / 16;
+  margin: 0 auto;
 }
 
 .meta-grid {
