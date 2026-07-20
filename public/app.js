@@ -478,7 +478,7 @@ function renderPanel(project, job) {
             ? `
           <video class="preview-video ${project.aspectRatio === "vertical" ? "preview-video-vertical" : "preview-video-landscape"}" controls preload="metadata" playsinline>
             <source src="${escapeAttribute(output.videoUrl)}" type="video/mp4">
-            <track kind="subtitles" srclang="ko" label="한국어" src="${escapeAttribute(output.vttUrl)}" default>
+            <track kind="subtitles" srclang="ko" label="한국어" src="${escapeAttribute(output.vttUrl)}">
           </video>
           <div class="meta-grid">
             <div class="meta"><span>길이</span><strong>${Math.round(output.duration)}초</strong></div>
